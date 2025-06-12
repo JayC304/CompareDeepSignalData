@@ -1,0 +1,49 @@
+{
+  "name": "excel-api-data-comparison",
+  "version": "1.0.0",
+  "description": "Tool to compare ATH Market Cap data between Excel files and dex3.ai API with intelligent pair search and replacement",
+  "main": "compareData.js",
+  "scripts": {
+    "start": "node compareData.js",
+    "test": "node testSearchAPI.js",
+    "compare": "node compareData.js",
+    "search-test": "node testSearchAPI.js",
+    "help": "echo 'Available commands: npm start (run comparison), npm test (test search API)'"
+  },
+  "keywords": [
+    "excel",
+    "api",
+    "comparison",
+    "crypto",
+    "defi",
+    "market-cap",
+    "dex",
+    "trading",
+    "data-analysis",
+    "automation",
+    "dex3.ai",
+    "solana",
+    "pump-fun",
+    "raydium",
+    "meteora"
+  ],
+  "author": "Augment Agent",
+  "license": "MIT",
+  "dependencies": {
+    "axios": "^1.9.0",
+    "exceljs": "^4.4.0"
+  },
+  "engines": {
+    "node": ">=14.0.0",
+    "npm": ">=6.0.0"
+  },
+  "config": {
+    "threshold": 0.5,
+    "outputFile": "comparison_results_firstTime.json",
+    "inputFile": "data.xlsx"
+  },
+  "files": [
+    "compareData.js",
+    "testSearchAPI.js"
+  ]
+}
