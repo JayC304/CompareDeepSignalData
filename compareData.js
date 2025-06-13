@@ -66,7 +66,7 @@ async function fetchCandleData(pairAddress, from, to) {
         to: to,
         vsToken: "USDC",
         interval: 60,
-        cb: 1440,
+        cb: 1440, //86400
         first: true,
         isMC: true,
         _: new Date().toISOString()
@@ -171,9 +171,20 @@ async function callApiForEachRow() {
 
             if (candleArray && candleArray.length > 0) {
                 // Dữ liệu candle có format: [timestamp, open, high, low, close, volume]
-                const maxHigh = Math.max(...candleArray.map(candle => parseFloat(candle[2])));
-                const maxHighCandle = candleArray.find(candle => parseFloat(candle[2]) === maxHigh);
-                const maxHighTimeString = new Date(maxHighCandle[0] * 1000).toISOString();
+                // Lọc candle trong khoảng thời gian từ (fromTimestamp + 1 giây) đến toTimestamp
+                const startTime = fromTimestamp + 1; // +1 giây
+                const filteredCandles = candleArray.filter(candle => {
+                    const candleTimestamp = candle[0];
+                    return candleTimestamp >= startTime && candleTimestamp <= toTimestamp;
+                });
+
+                console.log(`📊 Tổng số candle: ${candleArray.length}, Sau khi filter: ${filteredCandles.length}`);
+                console.log(`⏰ Khoảng thời gian filter: ${new Date(startTime * 1000).toISOString()} đến ${new Date(toTimestamp * 1000).toISOString()}`);
+
+                if (filteredCandles.length > 0) {
+                    const maxHigh = Math.max(...filteredCandles.map(candle => parseFloat(candle[2])));
+                    const maxHighCandle = filteredCandles.find(candle => parseFloat(candle[2]) === maxHigh);
+                    const maxHighTimeString = new Date(maxHighCandle[0] * 1000).toISOString();
 
                 const athMcapExcel = parseFloat(row['ATH MCap']);
 
@@ -238,9 +249,19 @@ async function callApiForEachRow() {
                                 }
 
                                 if (newCandleArray && newCandleArray.length > 0) {
-                                    const newMaxHigh = Math.max(...newCandleArray.map(candle => parseFloat(candle[2])));
-                                    const newMaxHighCandle = newCandleArray.find(candle => parseFloat(candle[2]) === newMaxHigh);
-                                    const newMaxHighTimeString = new Date(newMaxHighCandle[0] * 1000).toISOString();
+                                    // Lọc candle cho pair mới từ (fromTimestamp + 1 giây) đến toTimestamp
+                                    const startTime = fromTimestamp + 1;
+                                    const filteredNewCandles = newCandleArray.filter(candle => {
+                                        const candleTimestamp = candle[0];
+                                        return candleTimestamp >= startTime && candleTimestamp <= toTimestamp;
+                                    });
+
+                                    console.log(`📊 Pair mới - Tổng số candle: ${newCandleArray.length}, Sau khi filter: ${filteredNewCandles.length}`);
+
+                                    if (filteredNewCandles.length > 0) {
+                                        const newMaxHigh = Math.max(...filteredNewCandles.map(candle => parseFloat(candle[2])));
+                                        const newMaxHighCandle = filteredNewCandles.find(candle => parseFloat(candle[2]) === newMaxHigh);
+                                        const newMaxHighTimeString = new Date(newMaxHighCandle[0] * 1000).toISOString();
 
                                     const newDiff = athMcapExcel !== 0 ? (newMaxHigh - athMcapExcel) / athMcapExcel * 100 : 0;
                                     const newIsNearCorrect = Math.abs(newDiff) <= ACCEPTABLE_DIFF_PERCENT;
@@ -256,6 +277,9 @@ async function callApiForEachRow() {
                                     result.newDiffPercent = parseFloat(newDiff.toFixed(2));
                                     result.newStatus = newIsNearCorrect ? 'GẦN ĐÚNG' : 'SAI';
                                     result.newIsNearCorrect = newIsNearCorrect;
+                                    } else {
+                                        console.log(`⚠️ Không tìm thấy candle cho pair mới sau khi filter`);
+                                    }
                                 } else {
                                     console.log(`⚠️ Không tìm thấy candle cho pair mới`);
                                 }
@@ -268,7 +292,10 @@ async function callApiForEachRow() {
                         }
                     }
                 } else {
-                    console.log('⚠️ Không tìm thấy candle nào để lấy high!');
+                    console.log('⚠️ Không tìm thấy candle nào sau khi filter!');
+                }
+            } else {
+                console.log('⚠️ Không tìm thấy candle nào để lấy high!');
 
                     // Gọi API thay thế khi không tìm thấy candle
                     console.log(`🔄 Đang lấy thông tin pair thay thế...`);
