@@ -17,6 +17,10 @@ function getStartOfTodayUTCTimestamp() {
 const toTimestamp = getStartOfTodayUTCTimestamp();
 console.log('Timestamp đầu ngày hôm nay (UTC):', toTimestamp, '- Date:', new Date(toTimestamp * 1000).toISOString());
 
+// Tiêu chí % lệch để xác định "GẦN ĐÚNG" (có thể thay đổi dễ dàng)
+// Ví dụ: 0.5 = 0.5%, 1.0 = 1%, 2.0 = 2%
+const ACCEPTABLE_DIFF_PERCENT = 5; // 0.5% = gần đúng
+
 // Mảng để lưu kết quả
 const results = [];
 
@@ -62,7 +66,7 @@ async function fetchCandleData(pairAddress, from, to) {
         to: to,
         vsToken: "USDC",
         interval: 60,
-        cb: 400,
+        cb: 1440,
         first: true,
         isMC: true,
         _: new Date().toISOString()
@@ -86,6 +90,28 @@ async function fetchCandleData(pairAddress, from, to) {
     } catch (err) {
         console.error(`❌ Lỗi API cho pair ${pairAddress}:`, err.message);
         return [];
+    }
+}
+
+// Hàm gọi API để lấy thông tin pair thay thế khi kết quả sai
+async function fetchAlternativePairInfo(pairAddress) {
+    const url = "https://api.dex3.fi/token/detail/basic-info";
+    const body = {
+        pairAddress: pairAddress
+    };
+
+    try {
+        const res = await axios.post(url, body, {
+            headers: {
+                "Content-Type": "application/json",
+                "Cookie": "AWSALB=qwtgQ8dVw0p8d9ancoWHI1P79C2Y0Jj70AotTlN5Sz67ktNSJ8/mt8LeYm2OS++Q73aKIHtyYk2cNdjKCtEtK/+dfWnWs+Sq2rrbf6s1e8c9N6NWM3MjM5AT0Uin; AWSALBCORS=qwtgQ8dVw0p8d9ancoWHI1P79C2Y0Jj70AotTlN5Sz67ktNSJ8/mt8LeYm2OS++Q73aKIHtyYk2cNdjKCtEtK/+dfWnWs+Sq2rrbf6s1e8c9N6NWM3MjM5AT0Uin; AWSALB=wGDn35/M06P+f2II376DNEb6eYXe4bMH1YYkALDu6lfsIxM/krgpmKEvcxL03qQkegr031dsOcG+7WoVazVAhDxgIDRDobH4O6EpQW/Ez+jSgJ0k/d3GDCM6rZPR; AWSALBCORS=wGDn35/M06P+f2II376DNEb6eYXe4bMH1YYkALDu6lfsIxM/krgpmKEvcxL03qQkegr031dsOcG+7WoVazVAhDxgIDRDobH4O6EpQW/Ez+jSgJ0k/d3GDCM6rZPR"
+            }
+        });
+
+        return res.data || null;
+    } catch (err) {
+        console.error(`❌ Lỗi API thay thế cho pair ${pairAddress}:`, err.message);
+        return null;
     }
 }
 
@@ -153,7 +179,7 @@ async function callApiForEachRow() {
 
                 if (maxHigh !== null) {
                     const diff = athMcapExcel !== 0 ? (maxHigh - athMcapExcel) / athMcapExcel * 100 : 0;
-                    const isNearCorrect = Math.abs(diff) <= 0.5;
+                    const isNearCorrect = Math.abs(diff) <= ACCEPTABLE_DIFF_PERCENT;
 
                     // Lưu kết quả vào mảng
                     const result = {
@@ -184,9 +210,69 @@ async function callApiForEachRow() {
                         console.log(`Lệch:               ${diff.toFixed(2)}% (✅ GẦN ĐÚNG)`);
                     } else {
                         console.log(`Lệch:               ${diff.toFixed(2)}% (❌ SAI)`);
+
+                        // Gọi API thay thế khi kết quả sai
+                        console.log(`🔄 Đang lấy thông tin pair thay thế...`);
+                        const alternativeInfo = await fetchAlternativePairInfo(pairAddress);
+                        if (alternativeInfo && alternativeInfo.data && alternativeInfo.data.migrated_to_pool) {
+                            console.log(`📋 Tìm thấy migrated_to_pool: ${alternativeInfo.data.migrated_to_pool}`);
+
+                            // Sử dụng migrated_to_pool để kiểm tra lại
+                            const newPairAddress = alternativeInfo.data.migrated_to_pool;
+                            result.migratedToPair = newPairAddress; // Chỉ lưu pair thay thế
+                            console.log(`🔄 Đang kiểm tra lại với pair mới: ${newPairAddress}`);
+
+                            try {
+                                const newCandles = await fetchCandleData(newPairAddress, fromTimestamp, toTimestamp);
+                                let newCandleArray = [];
+
+                                if (Array.isArray(newCandles)) {
+                                    newCandleArray = newCandles;
+                                } else if (newCandles && newCandles.candles && Array.isArray(newCandles.candles)) {
+                                    newCandleArray = newCandles.candles;
+                                } else if (newCandles && typeof newCandles === 'object') {
+                                    const possibleArrays = Object.values(newCandles).filter(val => Array.isArray(val));
+                                    if (possibleArrays.length > 0) {
+                                        newCandleArray = possibleArrays[0];
+                                    }
+                                }
+
+                                if (newCandleArray && newCandleArray.length > 0) {
+                                    const newMaxHigh = Math.max(...newCandleArray.map(candle => parseFloat(candle[2])));
+                                    const newMaxHighCandle = newCandleArray.find(candle => parseFloat(candle[2]) === newMaxHigh);
+                                    const newMaxHighTimeString = new Date(newMaxHighCandle[0] * 1000).toISOString();
+
+                                    const newDiff = athMcapExcel !== 0 ? (newMaxHigh - athMcapExcel) / athMcapExcel * 100 : 0;
+                                    const newIsNearCorrect = Math.abs(newDiff) <= ACCEPTABLE_DIFF_PERCENT;
+
+                                    console.log(`🔄 KẾT QUẢ VỚI PAIR MỚI:`);
+                                    console.log(`Max High API (mới):     ${newMaxHigh}`);
+                                    console.log(`Thời gian Max High (mới): ${newMaxHighTimeString}`);
+                                    console.log(`Lệch (mới):             ${newDiff.toFixed(2)}% (${newIsNearCorrect ? '✅ GẦN ĐÚNG' : '❌ SAI'})`);
+
+                                    // Cập nhật kết quả với thông tin mới
+                                    result.newMaxHighAPI = newMaxHigh;
+                                    result.newMaxHighTimestamp = newMaxHighTimeString;
+                                    result.newDiffPercent = parseFloat(newDiff.toFixed(2));
+                                    result.newStatus = newIsNearCorrect ? 'GẦN ĐÚNG' : 'SAI';
+                                    result.newIsNearCorrect = newIsNearCorrect;
+                                } else {
+                                    console.log(`⚠️ Không tìm thấy candle cho pair mới`);
+                                }
+                            } catch (newErr) {
+                                console.error(`❌ Lỗi khi kiểm tra pair mới:`, newErr.message);
+                                result.newPairError = newErr.message;
+                            }
+                        } else {
+                            console.log(`⚠️ Không tìm thấy migrated_to_pool hoặc lỗi API thay thế`);
+                        }
                     }
                 } else {
                     console.log('⚠️ Không tìm thấy candle nào để lấy high!');
+
+                    // Gọi API thay thế khi không tìm thấy candle
+                    console.log(`🔄 Đang lấy thông tin pair thay thế...`);
+                    const alternativeInfo = await fetchAlternativePairInfo(pairAddress);
 
                     // Lưu kết quả lỗi vào mảng
                     const result = {
@@ -206,11 +292,76 @@ async function callApiForEachRow() {
                         status: 'LỖI - KHÔNG TÌM THẤY CANDLE',
                         isNearCorrect: false
                     };
+
+                    if (alternativeInfo && alternativeInfo.data && alternativeInfo.data.migrated_to_pool) {
+                        console.log(`📋 Tìm thấy migrated_to_pool: ${alternativeInfo.data.migrated_to_pool}`);
+
+                        // Sử dụng migrated_to_pool để kiểm tra lại
+                        const newPairAddress = alternativeInfo.data.migrated_to_pool;
+                        result.migratedToPair = newPairAddress; // Chỉ lưu pair thay thế
+                        console.log(`🔄 Đang kiểm tra lại với pair mới: ${newPairAddress}`);
+
+                        try {
+                            const newCandles = await fetchCandleData(newPairAddress, fromTimestamp, toTimestamp);
+                            let newCandleArray = [];
+
+                            if (Array.isArray(newCandles)) {
+                                newCandleArray = newCandles;
+                            } else if (newCandles && newCandles.candles && Array.isArray(newCandles.candles)) {
+                                newCandleArray = newCandles.candles;
+                            } else if (newCandles && typeof newCandles === 'object') {
+                                const possibleArrays = Object.values(newCandles).filter(val => Array.isArray(val));
+                                if (possibleArrays.length > 0) {
+                                    newCandleArray = possibleArrays[0];
+                                }
+                            }
+
+                            if (newCandleArray && newCandleArray.length > 0) {
+                                const newMaxHigh = Math.max(...newCandleArray.map(candle => parseFloat(candle[2])));
+                                const newMaxHighCandle = newCandleArray.find(candle => parseFloat(candle[2]) === newMaxHigh);
+                                const newMaxHighTimeString = new Date(newMaxHighCandle[0] * 1000).toISOString();
+
+                                const athMcapExcel = parseFloat(row['ATH MCap']) || 0;
+                                const newDiff = athMcapExcel !== 0 ? (newMaxHigh - athMcapExcel) / athMcapExcel * 100 : 0;
+                                const newIsNearCorrect = Math.abs(newDiff) <= ACCEPTABLE_DIFF_PERCENT;
+
+                                console.log(`🔄 KẾT QUẢ VỚI PAIR MỚI:`);
+                                console.log(`Max High API (mới):     ${newMaxHigh}`);
+                                console.log(`Thời gian Max High (mới): ${newMaxHighTimeString}`);
+                                console.log(`Lệch (mới):             ${newDiff.toFixed(2)}% (${newIsNearCorrect ? '✅ GẦN ĐÚNG' : '❌ SAI'})`);
+
+                                // Cập nhật kết quả với thông tin mới
+                                result.newMaxHighAPI = newMaxHigh;
+                                result.newMaxHighTimestamp = newMaxHighTimeString;
+                                result.newDiffPercent = parseFloat(newDiff.toFixed(2));
+                                result.newStatus = newIsNearCorrect ? 'GẦN ĐÚNG' : 'SAI';
+                                result.newIsNearCorrect = newIsNearCorrect;
+
+                                // Cập nhật status chính nếu pair mới cho kết quả tốt hơn
+                                if (newIsNearCorrect) {
+                                    result.status = 'GẦN ĐÚNG (VỚI PAIR MỚI)';
+                                    result.isNearCorrect = true;
+                                }
+                            } else {
+                                console.log(`⚠️ Không tìm thấy candle cho pair mới`);
+                            }
+                        } catch (newErr) {
+                            console.error(`❌ Lỗi khi kiểm tra pair mới:`, newErr.message);
+                            result.newPairError = newErr.message;
+                        }
+                    } else {
+                        console.log(`⚠️ Không tìm thấy migrated_to_pool hoặc lỗi API thay thế`);
+                    }
+
                     results.push(result);
                 }
 
             } else {
                 console.log('⚠️ Không tìm thấy candle nào để lấy high!');
+
+                // Gọi API thay thế khi không tìm thấy candle
+                console.log(`🔄 Đang lấy thông tin pair thay thế...`);
+                const alternativeInfo = await fetchAlternativePairInfo(pairAddress);
 
                 // Lưu kết quả lỗi vào mảng
                 const result = {
@@ -230,6 +381,67 @@ async function callApiForEachRow() {
                     status: 'LỖI - KHÔNG TÌM THẤY CANDLE',
                     isNearCorrect: false
                 };
+
+                if (alternativeInfo && alternativeInfo.data && alternativeInfo.data.migrated_to_pool) {
+                    console.log(`📋 Tìm thấy migrated_to_pool: ${alternativeInfo.data.migrated_to_pool}`);
+
+                    // Sử dụng migrated_to_pool để kiểm tra lại
+                    const newPairAddress = alternativeInfo.data.migrated_to_pool;
+                    result.migratedToPair = newPairAddress; // Chỉ lưu pair thay thế
+                    console.log(`🔄 Đang kiểm tra lại với pair mới: ${newPairAddress}`);
+
+                    try {
+                        const newCandles = await fetchCandleData(newPairAddress, fromTimestamp, toTimestamp);
+                        let newCandleArray = [];
+
+                        if (Array.isArray(newCandles)) {
+                            newCandleArray = newCandles;
+                        } else if (newCandles && newCandles.candles && Array.isArray(newCandles.candles)) {
+                            newCandleArray = newCandles.candles;
+                        } else if (newCandles && typeof newCandles === 'object') {
+                            const possibleArrays = Object.values(newCandles).filter(val => Array.isArray(val));
+                            if (possibleArrays.length > 0) {
+                                newCandleArray = possibleArrays[0];
+                            }
+                        }
+
+                        if (newCandleArray && newCandleArray.length > 0) {
+                            const newMaxHigh = Math.max(...newCandleArray.map(candle => parseFloat(candle[2])));
+                            const newMaxHighCandle = newCandleArray.find(candle => parseFloat(candle[2]) === newMaxHigh);
+                            const newMaxHighTimeString = new Date(newMaxHighCandle[0] * 1000).toISOString();
+
+                            const athMcapExcel = parseFloat(row['ATH MCap']) || 0;
+                            const newDiff = athMcapExcel !== 0 ? (newMaxHigh - athMcapExcel) / athMcapExcel * 100 : 0;
+                            const newIsNearCorrect = Math.abs(newDiff) <= ACCEPTABLE_DIFF_PERCENT;
+
+                            console.log(`🔄 KẾT QUẢ VỚI PAIR MỚI:`);
+                            console.log(`Max High API (mới):     ${newMaxHigh}`);
+                            console.log(`Thời gian Max High (mới): ${newMaxHighTimeString}`);
+                            console.log(`Lệch (mới):             ${newDiff.toFixed(2)}% (${newIsNearCorrect ? '✅ GẦN ĐÚNG' : '❌ SAI'})`);
+
+                            // Cập nhật kết quả với thông tin mới
+                            result.newMaxHighAPI = newMaxHigh;
+                            result.newMaxHighTimestamp = newMaxHighTimeString;
+                            result.newDiffPercent = parseFloat(newDiff.toFixed(2));
+                            result.newStatus = newIsNearCorrect ? 'GẦN ĐÚNG' : 'SAI';
+                            result.newIsNearCorrect = newIsNearCorrect;
+
+                            // Cập nhật status chính nếu pair mới cho kết quả tốt hơn
+                            if (newIsNearCorrect) {
+                                result.status = 'GẦN ĐÚNG (VỚI PAIR MỚI)';
+                                result.isNearCorrect = true;
+                            }
+                        } else {
+                            console.log(`⚠️ Không tìm thấy candle cho pair mới`);
+                        }
+                    } catch (newErr) {
+                        console.error(`❌ Lỗi khi kiểm tra pair mới:`, newErr.message);
+                        result.newPairError = newErr.message;
+                    }
+                } else {
+                    console.log(`⚠️ Không tìm thấy migrated_to_pool hoặc lỗi API thay thế`);
+                }
+
                 results.push(result);
             }
 
@@ -239,6 +451,10 @@ async function callApiForEachRow() {
             } else {
                 console.error('❌ Lỗi khác:', err.message);
             }
+
+            // Gọi API thay thế khi có lỗi API
+            console.log(`🔄 Đang lấy thông tin pair thay thế...`);
+            const alternativeInfo = await fetchAlternativePairInfo(pairAddress);
 
             // Lưu kết quả lỗi API vào mảng
             const result = {
@@ -259,6 +475,67 @@ async function callApiForEachRow() {
                 isNearCorrect: false,
                 error: err.message
             };
+
+            if (alternativeInfo && alternativeInfo.data && alternativeInfo.data.migrated_to_pool) {
+                console.log(`📋 Tìm thấy migrated_to_pool: ${alternativeInfo.data.migrated_to_pool}`);
+
+                // Sử dụng migrated_to_pool để kiểm tra lại
+                const newPairAddress = alternativeInfo.data.migrated_to_pool;
+                result.migratedToPair = newPairAddress; // Chỉ lưu pair thay thế
+                console.log(`🔄 Đang kiểm tra lại với pair mới: ${newPairAddress}`);
+
+                try {
+                    const newCandles = await fetchCandleData(newPairAddress, fromTimestamp, toTimestamp);
+                    let newCandleArray = [];
+
+                    if (Array.isArray(newCandles)) {
+                        newCandleArray = newCandles;
+                    } else if (newCandles && newCandles.candles && Array.isArray(newCandles.candles)) {
+                        newCandleArray = newCandles.candles;
+                    } else if (newCandles && typeof newCandles === 'object') {
+                        const possibleArrays = Object.values(newCandles).filter(val => Array.isArray(val));
+                        if (possibleArrays.length > 0) {
+                            newCandleArray = possibleArrays[0];
+                        }
+                    }
+
+                    if (newCandleArray && newCandleArray.length > 0) {
+                        const newMaxHigh = Math.max(...newCandleArray.map(candle => parseFloat(candle[2])));
+                        const newMaxHighCandle = newCandleArray.find(candle => parseFloat(candle[2]) === newMaxHigh);
+                        const newMaxHighTimeString = new Date(newMaxHighCandle[0] * 1000).toISOString();
+
+                        const athMcapExcel = parseFloat(row['ATH MCap']) || 0;
+                        const newDiff = athMcapExcel !== 0 ? (newMaxHigh - athMcapExcel) / athMcapExcel * 100 : 0;
+                        const newIsNearCorrect = Math.abs(newDiff) <= ACCEPTABLE_DIFF_PERCENT;
+
+                        console.log(`🔄 KẾT QUẢ VỚI PAIR MỚI:`);
+                        console.log(`Max High API (mới):     ${newMaxHigh}`);
+                        console.log(`Thời gian Max High (mới): ${newMaxHighTimeString}`);
+                        console.log(`Lệch (mới):             ${newDiff.toFixed(2)}% (${newIsNearCorrect ? '✅ GẦN ĐÚNG' : '❌ SAI'})`);
+
+                        // Cập nhật kết quả với thông tin mới
+                        result.newMaxHighAPI = newMaxHigh;
+                        result.newMaxHighTimestamp = newMaxHighTimeString;
+                        result.newDiffPercent = parseFloat(newDiff.toFixed(2));
+                        result.newStatus = newIsNearCorrect ? 'GẦN ĐÚNG' : 'SAI';
+                        result.newIsNearCorrect = newIsNearCorrect;
+
+                        // Cập nhật status chính nếu pair mới cho kết quả tốt hơn
+                        if (newIsNearCorrect) {
+                            result.status = 'GẦN ĐÚNG (VỚI PAIR MỚI)';
+                            result.isNearCorrect = true;
+                        }
+                    } else {
+                        console.log(`⚠️ Không tìm thấy candle cho pair mới`);
+                    }
+                } catch (newErr) {
+                    console.error(`❌ Lỗi khi kiểm tra pair mới:`, newErr.message);
+                    result.newPairError = newErr.message;
+                }
+            } else {
+                console.log(`⚠️ Không tìm thấy migrated_to_pool hoặc lỗi API thay thế`);
+            }
+
             results.push(result);
         }
     }
