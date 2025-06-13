@@ -93,3 +93,6 @@ Thumbs.db
 # Logs
 logs
 *.log
+
+Data.xlsx
+compareDataResult.json
