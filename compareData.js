@@ -24,6 +24,51 @@ const ACCEPTABLE_DIFF_PERCENT = 5; // 0.5% = gần đúng
 // Mảng để lưu kết quả
 const results = [];
 
+// Hàm tính toán thời gian từ firstTime đến ATH và định dạng thành HH:MM:SS
+function calculateTimeToATH(firstTimeStr, athTimestamp) {
+    if (!firstTimeStr || !athTimestamp) {
+        return null;
+    }
+
+    try {
+        // Chuyển đổi firstTime thành timestamp
+        let firstTimeMs;
+        if (typeof firstTimeStr === 'string' && firstTimeStr.includes('T')) {
+            firstTimeMs = new Date(firstTimeStr).getTime();
+        } else {
+            // Nếu là số timestamp
+            firstTimeMs = new Date(parseFloat(firstTimeStr) * 1000).getTime();
+        }
+
+        // Chuyển đổi athTimestamp thành timestamp
+        let athTimeMs;
+        if (typeof athTimestamp === 'string' && athTimestamp.includes('T')) {
+            athTimeMs = new Date(athTimestamp).getTime();
+        } else {
+            athTimeMs = new Date(parseFloat(athTimestamp) * 1000).getTime();
+        }
+
+        // Tính khoảng cách thời gian (milliseconds)
+        const diffMs = athTimeMs - firstTimeMs;
+
+        if (diffMs < 0) {
+            return "00:00:00"; // Nếu ATH xảy ra trước firstTime
+        }
+
+        // Chuyển đổi thành giờ:phút:giây
+        const totalSeconds = Math.floor(diffMs / 1000);
+        const hours = Math.floor(totalSeconds / 3600);
+        const minutes = Math.floor((totalSeconds % 3600) / 60);
+        const seconds = totalSeconds % 60;
+
+        // Định dạng thành HH:MM:SS
+        return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+    } catch (error) {
+        console.error('Lỗi khi tính toán Time to ATH:', error);
+        return null;
+    }
+}
+
 // Đọc dữ liệu từ file Excel
 async function readExcelFile() {
     const workbook = new ExcelJS.Workbook();
@@ -192,6 +237,9 @@ async function callApiForEachRow() {
                     const diff = athMcapExcel !== 0 ? (maxHigh - athMcapExcel) / athMcapExcel * 100 : 0;
                     const isNearCorrect = Math.abs(diff) <= ACCEPTABLE_DIFF_PERCENT;
 
+                    // Tính toán Time to ATH
+                    const timeToATH = calculateTimeToATH(firstTimeStr, maxHighTimeString);
+
                     // Lưu kết quả vào mảng
                     const result = {
                         row: index + 2,
@@ -206,6 +254,7 @@ async function callApiForEachRow() {
                         athMcapExcel,
                         maxHighAPI: maxHigh,
                         maxHighTimestamp: maxHighTimeString,
+                        timeToATH: timeToATH,
                         diffPercent: parseFloat(diff.toFixed(2)),
                         status: isNearCorrect ? 'GẦN ĐÚNG' : 'SAI',
                         isNearCorrect
@@ -217,6 +266,7 @@ async function callApiForEachRow() {
                     console.log(`ATH MCap Excel:     ${athMcapExcel}`);
                     console.log(`Max High API:       ${maxHigh}`);
                     console.log(`Thời gian Max High: ${maxHighTimeString}`);
+                    console.log(`Time to ATH:        ${timeToATH}`);
                     if (isNearCorrect) {
                         console.log(`Lệch:               ${diff.toFixed(2)}% (✅ GẦN ĐÚNG)`);
                     } else {
@@ -266,14 +316,19 @@ async function callApiForEachRow() {
                                     const newDiff = athMcapExcel !== 0 ? (newMaxHigh - athMcapExcel) / athMcapExcel * 100 : 0;
                                     const newIsNearCorrect = Math.abs(newDiff) <= ACCEPTABLE_DIFF_PERCENT;
 
+                                    // Tính toán Time to ATH cho pair mới
+                                    const newTimeToATH = calculateTimeToATH(firstTimeStr, newMaxHighTimeString);
+
                                     console.log(`🔄 KẾT QUẢ VỚI PAIR MỚI:`);
                                     console.log(`Max High API (mới):     ${newMaxHigh}`);
                                     console.log(`Thời gian Max High (mới): ${newMaxHighTimeString}`);
+                                    console.log(`Time to ATH (mới):      ${newTimeToATH}`);
                                     console.log(`Lệch (mới):             ${newDiff.toFixed(2)}% (${newIsNearCorrect ? '✅ GẦN ĐÚNG' : '❌ SAI'})`);
 
                                     // Cập nhật kết quả với thông tin mới
                                     result.newMaxHighAPI = newMaxHigh;
                                     result.newMaxHighTimestamp = newMaxHighTimeString;
+                                    result.newTimeToATH = newTimeToATH;
                                     result.newDiffPercent = parseFloat(newDiff.toFixed(2));
                                     result.newStatus = newIsNearCorrect ? 'GẦN ĐÚNG' : 'SAI';
                                     result.newIsNearCorrect = newIsNearCorrect;
@@ -583,12 +638,122 @@ async function callApiForEachRow() {
 
     const fileName = `compareDataResult.json`;
     fs.writeFileSync(fileName, JSON.stringify(outputData, null, 2), 'utf8');
+    
+    // Xuất kết quả ra file Excel
+    const excelFileName = await exportToExcel(results, outputData.metadata);
 
     console.log(`\n📊 TỔNG KẾT:`);
     console.log(`✅ Gần đúng: ${outputData.metadata.summary.nearCorrect}`);
     console.log(`❌ Sai: ${outputData.metadata.summary.incorrect}`);
     console.log(`⚠️ Lỗi: ${outputData.metadata.summary.errors}`);
-    console.log(`📁 Đã xuất kết quả ra file: ${fileName}`);
+    console.log(`📁 Đã xuất kết quả ra file JSON: ${fileName}`);
+    console.log(`📁 Đã xuất kết quả ra file Excel: ${excelFileName}`);
+}
+
+// Thêm hàm để xuất kết quả ra file Excel
+async function exportToExcel(results, metadata) {
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet('Kết quả so sánh');
+    
+    // Định nghĩa các cột
+    worksheet.columns = [
+        { header: 'Dòng', key: 'row', width: 8 },
+        { header: 'Token CA', key: 'tokenCA', width: 45 },
+        { header: 'Pair Address', key: 'pairAddress', width: 45 },
+        { header: 'Symbol', key: 'symbol', width: 12 },
+        { header: 'Signer', key: 'signer', width: 45 },
+        { header: 'First Time', key: 'firstTime', width: 25 },
+        { header: 'ATH MCap Excel', key: 'athMcapExcel', width: 15 },
+        { header: 'Max High API', key: 'maxHighAPI', width: 15 },
+        { header: 'Max High Timestamp', key: 'maxHighTimestamp', width: 25 },
+        { header: 'Time to ATH', key: 'timeToATH', width: 12 },
+        { header: 'Lệch %', key: 'diffPercent', width: 10 },
+        { header: 'Trạng thái', key: 'status', width: 20 },
+        { header: 'Migrated To Pair', key: 'migratedToPair', width: 45 },
+        { header: 'Max High API (mới)', key: 'newMaxHighAPI', width: 15 },
+        { header: 'Max High Timestamp (mới)', key: 'newMaxHighTimestamp', width: 25 },
+        { header: 'Time to ATH (mới)', key: 'newTimeToATH', width: 12 },
+        { header: 'Lệch % (mới)', key: 'newDiffPercent', width: 10 },
+        { header: 'Trạng thái (mới)', key: 'newStatus', width: 20 }
+    ];
+    
+    // Thêm dữ liệu
+    results.forEach(result => {
+        worksheet.addRow(result);
+    });
+    
+    // Định dạng header
+    worksheet.getRow(1).font = { bold: true };
+    worksheet.getRow(1).fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFD3D3D3' }
+    };
+    
+    // Định dạng các cột trạng thái
+    worksheet.eachRow((row, rowNumber) => {
+        if (rowNumber > 1) {
+            // Định dạng cột trạng thái chính
+            const statusCell = row.getCell('status');
+            if (statusCell.value && statusCell.value.includes('GẦN ĐÚNG')) {
+                statusCell.fill = {
+                    type: 'pattern',
+                    pattern: 'solid',
+                    fgColor: { argb: 'FF90EE90' } // Light green
+                };
+            } else if (statusCell.value && statusCell.value.includes('SAI')) {
+                statusCell.fill = {
+                    type: 'pattern',
+                    pattern: 'solid',
+                    fgColor: { argb: 'FFFFCCCB' } // Light red
+                };
+            } else if (statusCell.value && statusCell.value.includes('LỖI')) {
+                statusCell.fill = {
+                    type: 'pattern',
+                    pattern: 'solid',
+                    fgColor: { argb: 'FFFFD700' } // Gold/yellow
+                };
+            }
+            
+            // Định dạng cột trạng thái mới
+            const newStatusCell = row.getCell('newStatus');
+            if (newStatusCell.value && newStatusCell.value.includes('GẦN ĐÚNG')) {
+                newStatusCell.fill = {
+                    type: 'pattern',
+                    pattern: 'solid',
+                    fgColor: { argb: 'FF90EE90' } // Light green
+                };
+            } else if (newStatusCell.value && newStatusCell.value.includes('SAI')) {
+                newStatusCell.fill = {
+                    type: 'pattern',
+                    pattern: 'solid',
+                    fgColor: { argb: 'FFFFCCCB' } // Light red
+                };
+            }
+        }
+    });
+    
+    // Thêm sheet tổng kết
+    const summarySheet = workbook.addWorksheet('Tổng kết');
+    summarySheet.columns = [
+        { header: 'Thông tin', key: 'info', width: 30 },
+        { header: 'Giá trị', key: 'value', width: 15 }
+    ];
+    
+    summarySheet.addRow({ info: 'Thời gian xuất', value: metadata.timestamp });
+    summarySheet.addRow({ info: 'Tổng số dòng', value: metadata.totalRows });
+    summarySheet.addRow({ info: 'Số kết quả gần đúng', value: metadata.summary.nearCorrect });
+    summarySheet.addRow({ info: 'Số kết quả sai', value: metadata.summary.incorrect });
+    summarySheet.addRow({ info: 'Số lỗi', value: metadata.summary.errors });
+    summarySheet.addRow({ info: 'Tỷ lệ chính xác', value: `${((metadata.summary.nearCorrect / metadata.totalRows) * 100).toFixed(2)}%` });
+    
+    summarySheet.getColumn('info').font = { bold: true };
+    
+    // Lưu file
+    const excelFileName = `compareDataResult_${new Date().toISOString().slice(0,10)}.xlsx`;
+    await workbook.xlsx.writeFile(excelFileName);
+    
+    return excelFileName;
 }
 
 callApiForEachRow();
